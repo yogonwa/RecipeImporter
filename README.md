@@ -62,6 +62,19 @@ chmod +x build.sh
 3. Configure environment variables in Lambda:
    - Add `NOTION_API_KEY` and `NOTION_DATABASE_ID`
 
+4. Set up API Gateway (TODO):
+   - Create a new HTTP API
+   - Configure Lambda integration
+   - Set up security (API key, IAM, etc.)
+   - Enable CORS if needed
+   - Deploy the API
+
+5. Configure Notion Webhook (TODO):
+   - Set up webhook in your Notion integration
+   - Configure webhook to trigger on page updates
+   - Point webhook to your API Gateway endpoint
+   - Test webhook connectivity
+
 ## Testing
 
 Run the test script:
@@ -80,6 +93,8 @@ python test_lambda.py
 
 ## Next Steps
 
+- [ ] **PRIORITY:** Set up API Gateway integration
+- [ ] **PRIORITY:** Configure Notion webhook integration
 - [ ] Add support for recipe images in Notion pages
 - [ ] Implement rate limiting for recipe scraping
 - [ ] Add support for custom cuisine/category mappings
@@ -88,6 +103,33 @@ python test_lambda.py
 - [ ] Set up CI/CD pipeline
 - [ ] Add support for batch recipe imports
 - [ ] Improve error reporting and notifications
+- [ ] Add webhook security best practices
+- [ ] Implement webhook signature verification
+- [ ] Add monitoring for webhook failures
+
+## Architecture
+
+```
+                                   ┌─────────────┐
+                                   │             │
+                                   │   Notion    │
+                                   │  Database   │
+                                   │             │
+                                   └──────┬──────┘
+                                          │
+                                          │ Webhook
+                                          ▼
+┌─────────────┐    HTTPS    ┌──────────────────┐    Invoke    ┌─────────────┐
+│   Notion    │─────────────▶│   API Gateway   │─────────────▶│   Lambda    │
+│  Webhook    │             │      (TODO)      │             │  Function   │
+└─────────────┘             └──────────────────┘             └─────────────┘
+                                                                    │
+                                                                    │
+                                                              ┌─────▼─────┐
+                                                              │  Recipe   │
+                                                              │ Websites  │
+                                                              └───────────┘
+```
 
 ## Contributing
 
