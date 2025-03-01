@@ -1,6 +1,9 @@
-recipe-scrapers>=14.50.0
+recipe-scrapers==15.5.1
+notion-client>=2.2.1
+python-dotenv>=1.0.0
 beautifulsoup4==4.13.3
 requests==2.32.3
-lxml==5.1.0
-notion-client>=2.2.1
-python-dotenv>=1.0.0 
+isodate==0.6.1
+lxml==4.9.3
+html5lib>=1.1
+extruct>=0.16.0 
