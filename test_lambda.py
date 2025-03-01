@@ -1,42 +1,64 @@
+import os
 import json
-from lambda_function import lambda_handler, scrape_recipe
+from lambda_function import lambda_handler
 
-def test_direct_scrape():
-    """Test the scrape_recipe function directly"""
-    # Test URLs - using well-supported recipe websites
-    test_urls = [
-        "https://www.allrecipes.com/recipe/273864/greek-chicken-skewers/",
-        "https://www.bbcgoodfood.com/recipes/classic-lasagne-0",
-        "https://www.epicurious.com/recipes/food/views/classic-chocolate-mousse-107701",
-    ]
-    
-    for url in test_urls:
-        print(f"\nTesting URL: {url}")
-        try:
-            result = scrape_recipe(url)
-            print("Success! Recipe data:")
-            print(json.dumps(result, indent=2))
-        except Exception as e:
-            print(f"Error scraping {url}: {str(e)}")
+# Test recipe URL - using a reliable recipe site
+TEST_URL = "https://www.allrecipes.com/recipe/228122/curry-stand-chicken-tikka-masala-sauce/"
 
-def test_lambda_handler():
-    """Test the full Lambda handler with a mock event"""
-    # Test event simulating API Gateway request
-    test_event = {
-        "body": json.dumps({
-            "url": "https://www.allrecipes.com/recipe/273864/greek-chicken-skewers/"
-        })
-    }
+# Simulate Notion webhook event
+test_event = {
+    "body": json.dumps({
+        "page": {
+            "id": "test_page_id",
+            "properties": {
+                "Link": {
+                    "rich_text": [
+                        {
+                            "text": {
+                                "content": TEST_URL
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+    })
+}
+
+def test_lambda():
+    """
+    Test the Lambda function with a real recipe URL.
+    """
+    print("🧪 Starting Lambda function test...")
+    print(f"🔗 Testing with URL: {TEST_URL}")
     
-    print("\nTesting Lambda handler with mock event:")
-    result = lambda_handler(test_event, None)
-    print(f"Status Code: {result['statusCode']}")
-    print("Response Body:")
-    print(json.dumps(json.loads(result['body']), indent=2))
+    # Verify environment variables
+    notion_key = os.environ.get('NOTION_API_KEY')
+    notion_db = os.environ.get('NOTION_DATABASE_ID')
+    
+    if not notion_key or not notion_db:
+        print("❌ Error: Missing environment variables!")
+        print("Please set NOTION_API_KEY and NOTION_DATABASE_ID")
+        return
+    
+    try:
+        # Call lambda handler
+        print("📡 Calling Lambda handler...")
+        response = lambda_handler(test_event, None)
+        
+        # Check response
+        if response['statusCode'] == 200:
+            print("✅ Test passed! Recipe was successfully processed")
+            print("\nResponse details:")
+            print(f"Status Code: {response['statusCode']}")
+            print(f"Body: {json.loads(response['body'])}")
+        else:
+            print("❌ Test failed!")
+            print(f"Status Code: {response['statusCode']}")
+            print(f"Error: {response['body']}")
+            
+    except Exception as e:
+        print(f"❌ Test failed with exception: {str(e)}")
 
 if __name__ == "__main__":
-    print("=== Testing Direct Scraping ===")
-    test_direct_scrape()
-    
-    print("\n=== Testing Lambda Handler ===")
-    test_lambda_handler() 
+    test_lambda() 
