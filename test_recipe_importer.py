@@ -1,12 +1,13 @@
 import json
 import os
-from lambda_function import scrape_recipe, update_notion_page, lambda_handler
+from lambda_function import scrape_recipe, update_notion_page, lambda_handler, get_page_id_from_unique_id
 
 def test_scraping():
     """Test recipe scraping from different sources"""
     test_urls = [
         "https://www.allrecipes.com/recipe/10813/best-chocolate-chip-cookies/",  # Popular, likely stable URL
         "https://www.simplyrecipes.com/recipes/perfect_guacamole/",  # SimplyRecipes works well
+        "https://www.foodnetwork.com/recipes/food-network-kitchen/stuffed-green-peppers-3364195",
         "https://www.bonappetit.com/recipe/classic-chocolate-mousse"  # Bon Appetit usually works
     ]
     
@@ -26,41 +27,60 @@ def test_scraping():
         except Exception as e:
             print(f"✗ Error scraping {url}: {str(e)}")
 
+def test_unique_id_lookup():
+    """Test looking up a page ID from a unique ID"""
+    print("\n=== Testing Unique ID Lookup ===")
+    
+    if not os.environ.get('NOTION_API_KEY') or not os.environ.get('NOTION_DATABASE_ID'):
+        print("✗ NOTION_API_KEY or NOTION_DATABASE_ID not set. Skipping unique ID lookup test.")
+        return
+        
+    test_unique_id = os.environ.get('TEST_UNIQUE_ID')
+    if not test_unique_id:
+        print("✗ TEST_UNIQUE_ID not set. Please set it to test unique ID lookup.")
+        return
+        
+    try:
+        page_id = get_page_id_from_unique_id(test_unique_id)
+        if page_id:
+            print(f"✓ Successfully found page ID: {page_id}")
+        else:
+            print("✗ Could not find page ID for the given unique ID")
+    except Exception as e:
+        print(f"✗ Error during unique ID lookup: {str(e)}")
+
 def test_notion_integration():
-    """Test Notion integration with a test page"""
-    # Check if we have the required environment variables
+    """Test Notion integration with a test page using unique ID"""
     if not os.environ.get('NOTION_API_KEY'):
         print("\n✗ NOTION_API_KEY not set. Skipping Notion integration test.")
         return
     
     print("\n=== Testing Notion Integration ===")
     
-    # Create a mock webhook event with a known working URL
+    # Create a mock webhook event with unique ID instead of page ID
     test_event = {
         "body": json.dumps({
-            "page": {
-                "id": os.environ.get('TEST_PAGE_ID'),
-                "properties": {
-                    "Link": {
-                        "rich_text": [{
-                            "text": {
-                                "content": "https://www.simplyrecipes.com/recipes/perfect_guacamole/"
-                            }
-                        }]
-                    }
+            "properties": {
+                "Unique ID": {"unique_id": {"number": 11}},
+                "Link": {
+                    "rich_text": [{
+                        "text": {
+                            "content": "https://www.simplyrecipes.com/recipes/perfect_guacamole/"
+                        }
+                    }]
                 }
             }
         })
     }
     
-    if not os.environ.get('TEST_PAGE_ID'):
-        print("✗ TEST_PAGE_ID not set. Please set it to test Notion integration.")
-        print("  Create a page in your Notion database and set its ID as TEST_PAGE_ID")
+    if not os.environ.get('TEST_UNIQUE_ID'):
+        print("✗ TEST_UNIQUE_ID not set. Please set it to test Notion integration.")
+        print("  Set the Unique ID from your Notion database as TEST_UNIQUE_ID")
         return
     
     try:
         print(f"Using Notion API Key: {os.environ.get('NOTION_API_KEY')[:10]}...")
-        print(f"Using Test Page ID: {os.environ.get('TEST_PAGE_ID')}")
+        print(f"Using Test Unique ID: {os.environ.get('TEST_UNIQUE_ID')}")
         result = lambda_handler(test_event, None)
         if result['statusCode'] == 200:
             print("✓ Successfully updated Notion page")
@@ -75,16 +95,67 @@ def test_notion_integration():
         import traceback
         print(traceback.format_exc())
 
+def test_guacamole():
+    """Test just the guacamole recipe integration"""
+    print("\n=== Testing Guacamole Recipe Integration ===")
+    
+    if not os.environ.get('NOTION_API_KEY'):
+        print("✗ NOTION_API_KEY not set. Skipping test.")
+        return
+        
+    if not os.environ.get('TEST_UNIQUE_ID'):
+        print("✗ TEST_UNIQUE_ID not set. Please set it to test integration.")
+        return
+        
+    print(f"Using Notion API Key: {os.environ.get('NOTION_API_KEY')[:10]}...")
+    print(f"Using Test Unique ID: {os.environ.get('TEST_UNIQUE_ID')}")
+    
+    # First test the unique ID lookup
+    try:
+        page_id = get_page_id_from_unique_id(os.environ.get('TEST_UNIQUE_ID'))
+        if page_id:
+            print(f"✓ Successfully found page ID: {page_id}")
+        else:
+            print("✗ Could not find page ID for the given unique ID")
+            return
+    except Exception as e:
+        print(f"✗ Error during unique ID lookup: {str(e)}")
+        return
+    
+    # Now test the recipe integration
+    test_event = {
+        "body": json.dumps({
+            "properties": {
+                "Unique ID": {"unique_id": {"number": int(os.environ.get('TEST_UNIQUE_ID').split('-')[1])}},
+                "Link": {
+                    "rich_text": [{
+                        "text": {
+                            "content": "https://www.simplyrecipes.com/recipes/perfect_guacamole/"
+                        }
+                    }]
+                }
+            }
+        })
+    }
+    
+    try:
+        result = lambda_handler(test_event, None)
+        if result['statusCode'] == 200:
+            print("✓ Successfully updated Notion page")
+            print(f"  Status Code: {result['statusCode']}")
+            response_data = json.loads(result['body'])
+            print(f"  Message: {response_data.get('message')}")
+        else:
+            print(f"✗ Error updating Notion page: {result['body']}")
+    except Exception as e:
+        print(f"✗ Error during recipe integration: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
+
 def main():
-    print("Starting Recipe Importer Tests...")
-    
-    # Test recipe scraping
-    test_scraping()
-    
-    # Test Notion integration
-    test_notion_integration()
-    
-    print("\nTests completed!")
+    print("Starting Guacamole Recipe Test...")
+    test_guacamole()
+    print("\nTest completed!")
 
 if __name__ == "__main__":
     main() 

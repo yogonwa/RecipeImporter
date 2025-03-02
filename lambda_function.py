@@ -37,30 +37,83 @@ def is_valid_url(url: str) -> bool:
     except Exception:
         return False
 
+def get_page_id_from_unique_id(unique_id: str) -> Optional[str]:
+    """
+    Look up a page ID from a unique ID by querying the Notion database.
+    Returns the page ID if found, None otherwise.
+    """
+    if not notion or not NOTION_DATABASE_ID:
+        logger.error("Notion client or database ID not configured")
+        return None
+        
+    try:
+        # Parse the unique ID number from the format (e.g., "CB-11" -> 11)
+        try:
+            unique_id_number = int(unique_id.split('-')[1])
+        except (IndexError, ValueError):
+            logger.error(f"Invalid unique ID format: {unique_id}")
+            return None
+            
+        # Query the database for the page with matching unique ID number
+        response = notion.databases.query(
+            database_id=NOTION_DATABASE_ID,
+            filter={
+                "property": "Unique ID",
+                "unique_id": {
+                    "equals": unique_id_number
+                }
+            }
+        )
+        
+        # Check if we found a matching page
+        if response["results"]:
+            return response["results"][0]["id"]
+        else:
+            logger.error(f"No page found with unique ID number: {unique_id_number}")
+            return None
+            
+    except Exception as e:
+        logger.error(f"Error looking up page ID from unique ID: {str(e)}")
+        return None
+
 def extract_notion_page_info(event: Dict[str, Any]) -> Optional[Tuple[str, str]]:
     """
-    Extract page ID and URL from Notion webhook event.
+    Extract page info from Notion webhook event.
+    Now supports both direct page ID and unique ID.
     Returns tuple of (page_id, url) if valid, None if invalid.
     """
     try:
         # Parse body
         body = json.loads(event['body']) if isinstance(event['body'], str) else event['body']
         
-        # Extract page ID and properties from the webhook payload
-        page_id = body.get('page', {}).get('id')
-        properties = body.get('page', {}).get('properties', {})
+        # Extract properties from the webhook payload
+        properties = body.get('properties', {})
         
-        # Get URL from properties (using 'Link' field as per schema)
-        url = properties.get('Link', {}).get('rich_text', [{}])[0].get('text', {}).get('content', '')
+        # Get URL from properties
+        url = properties.get('Link', {}).get('rich_text', [{}])[0].get('text', {}).get('content')
         
-        if not page_id or not url:
-            logger.error("Missing page ID or URL in webhook payload")
+        # Try to get page ID from unique ID first
+        unique_id_prop = properties.get('Unique ID', {}).get('unique_id', {})
+        if unique_id_prop:
+            unique_id = f"{unique_id_prop.get('prefix', 'CB')}-{unique_id_prop.get('number')}"
+            page_id = get_page_id_from_unique_id(unique_id)
+        else:
+            # Fall back to direct page ID if available
+            page_id = body.get('page', {}).get('id')
+        
+        if not page_id:
+            logger.error("Failed to get page ID from event")
+            return None
+            
+        if not url:
+            logger.error("No URL found in properties")
             return None
             
         if not is_valid_url(url):
             logger.error(f"Invalid URL format: {url}")
             return None
             
+        logger.info(f"Successfully extracted page info - ID: {page_id}, URL: {url}")
         return (page_id, url)
         
     except Exception as e:
@@ -69,23 +122,14 @@ def extract_notion_page_info(event: Dict[str, Any]) -> Optional[Tuple[str, str]]
 
 def scrape_recipe(url: str) -> Dict[str, Any]:
     """
-    Scrape recipe data from the provided URL.
+    Scrape recipe data from the given URL.
     Returns structured recipe data.
     """
     try:
         logger.info(f"Starting recipe scraping for URL: {url}")
         
-        # Configure scraper options - only use supported options
-        options = {}  # Start with empty options
-        
-        # Check if wild_mode is supported
-        try:
-            scraper = scrape_me(url, wild_mode=False)
-            options['wild_mode'] = False
-        except TypeError:
-            logger.warning("wild_mode option not supported, using default settings")
-            scraper = scrape_me(url)
-        
+        # Initialize scraper
+        scraper = scrape_me(url)
         logger.info(f"Scraper initialized successfully. Host: {scraper.host()}")
         
         # Log schema data
