@@ -83,39 +83,52 @@ def extract_notion_page_info(event: Dict[str, Any]) -> Optional[Tuple[str, str]]
     Returns tuple of (page_id, url) if valid, None if invalid.
     """
     try:
-        # Parse body
-        body = json.loads(event['body']) if isinstance(event['body'], str) else event['body']
-        
-        # Extract properties from the webhook payload
-        properties = body.get('properties', {})
-        
-        # Get URL from properties
-        url = properties.get('Link', {}).get('rich_text', [{}])[0].get('text', {}).get('content')
-        
-        # Try to get page ID from unique ID first
-        unique_id_prop = properties.get('Unique ID', {}).get('unique_id', {})
+        # Check if 'body' exists (for API Gateway-wrapped requests)
+        if "body" in event:
+            body = json.loads(event["body"]) if isinstance(event["body"], str) else event["body"]
+        else:
+            body = event  # Direct payload (Notion webhook)
+
+        # Determine where to extract data from
+        if "data" in body:  # Notion webhook format
+            page_data = body["data"]
+            properties = page_data.get("properties", {})
+            page_id = page_data.get("id")
+
+        elif "page" in body:  # API Gateway test format
+            page_data = body["page"]
+            properties = page_data.get("properties", {})
+            page_id = page_data.get("id")
+
+        else:
+            logger.error("Invalid webhook format: No 'data' or 'page' field found")
+            return None
+
+        # Extract URL from properties
+        url = None
+        if "Link" in properties:
+            if properties["Link"].get("type") == "url":  # Notion webhook format
+                url = properties["Link"]["url"]
+            elif "rich_text" in properties["Link"]:  # API Gateway test format
+                url = properties["Link"]["rich_text"][0]["text"]["content"]
+
+        if not url or not is_valid_url(url):
+            logger.error(f"Invalid or missing URL in properties: {url}")
+            return None
+
+        # Extract unique ID
+        unique_id_prop = properties.get("Unique ID", {}).get("unique_id", {})
         if unique_id_prop:
             unique_id = f"{unique_id_prop.get('prefix', 'CB')}-{unique_id_prop.get('number')}"
-            page_id = get_page_id_from_unique_id(unique_id)
-        else:
-            # Fall back to direct page ID if available
-            page_id = body.get('page', {}).get('id')
-        
+            page_id = get_page_id_from_unique_id(unique_id) or page_id
+
         if not page_id:
             logger.error("Failed to get page ID from event")
             return None
-            
-        if not url:
-            logger.error("No URL found in properties")
-            return None
-            
-        if not is_valid_url(url):
-            logger.error(f"Invalid URL format: {url}")
-            return None
-            
+
         logger.info(f"Successfully extracted page info - ID: {page_id}, URL: {url}")
         return (page_id, url)
-        
+
     except Exception as e:
         logger.error(f"Error extracting page info: {str(e)}")
         return None

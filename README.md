@@ -93,8 +93,8 @@ python test_lambda.py
 
 ## Next Steps
 
-- [ ] **PRIORITY:** Set up API Gateway integration
-- [ ] **PRIORITY:** Configure Notion webhook integration
+- [X] **PRIORITY:** Set up API Gateway integration
+- [X] **PRIORITY:** Configure Notion webhook integration
 - [ ] Add support for recipe images in Notion pages
 - [ ] Implement rate limiting for recipe scraping
 - [ ] Add support for custom cuisine/category mappings
