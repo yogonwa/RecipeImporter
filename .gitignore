@@ -3,3 +3,7 @@ __pycache__/
 *.pyc
 .env
 .DS_Store
+*.so
+venv/
+layer/
+lambda_layer/

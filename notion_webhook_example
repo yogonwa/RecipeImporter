@@ -1,0 +1,49 @@
+{
+  "source": {
+    "type": "automation",
+    "automation_id": "1aaf9b70-ee4e-806c-b308-004d93b305f4",
+    "action_id": "1aaf9b70-ee4e-805c-8bb4-005a27f2f2e3",
+    "event_id": "04a2dd39-13fa-4eaf-9217-829ef72cd2ad",
+    "attempt": 1
+  },
+  "data": {
+    "object": "page",
+    "id": "1aaf9b70-ee4e-807d-a5ee-c780d5aa4266",
+    "created_time": "2025-03-02T02:33:00.000Z",
+    "last_edited_time": "2025-03-02T02:42:00.000Z",
+    "created_by": {
+      "object": "user",
+      "id": "385b1f1a-c1a2-4d18-9b7f-9f6008174c05"
+    },
+    "last_edited_by": {
+      "object": "user",
+      "id": "385b1f1a-c1a2-4d18-9b7f-9f6008174c05"
+    },
+    "cover": null,
+    "icon": null,
+    "parent": {
+      "type": "database_id",
+      "database_id": "12cf9b70-ee4e-8192-8adc-c78aa6848870"
+    },
+    "archived": false,
+    "in_trash": false,
+    "properties": {
+      "Link": {
+        "id": "358b7977-fdb8-485e-ba3b-413efeaf4ddb",
+        "type": "url",
+        "url": "https://www.foodnetwork.com/recipes/food-network-kitchen/stuffed-green-peppers-3364195"
+      },
+      "Unique ID": {
+        "id": "cd%3Ab",
+        "type": "unique_id",
+        "unique_id": {
+          "prefix": "CB",
+          "number": 13
+        }
+      }
+    },
+    "url": "https://www.notion.so/1aaf9b70ee4e807da5eec780d5aa4266",
+    "public_url": null,
+    "request_id": "4f47ee08-1b5a-4c75-83c7-d0f92888aa60"
+  }
+}
