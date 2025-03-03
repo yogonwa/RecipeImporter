@@ -4,7 +4,11 @@ A serverless AWS Lambda function that imports recipes from various recipe websit
 
 ## Features
 
-- 🔍 Supports 300+ recipe websites through recipe-scrapers
+- 🔍 Multi-layered recipe extraction:
+  - Schema.org structured data (highest confidence)
+  - JSON-LD extraction (high confidence)
+  - Wild mode pattern matching (medium confidence)
+  - LLM-based extraction (fallback)
 - 📝 Extracts detailed recipe information including:
   - Title and source
   - Ingredients and instructions
@@ -18,8 +22,31 @@ A serverless AWS Lambda function that imports recipes from various recipe websit
   - Numbered instructions
   - Cuisine tags with emojis
   - Recipe type categorization
+  - Import details with confidence scoring
 - 🚀 Deployed as an AWS Lambda function
 - 🔒 Secure handling of API keys through environment variables
+
+## Confidence Scoring System
+
+The importer uses a sophisticated confidence scoring system to ensure reliable recipe extraction:
+
+- 🟢 High Confidence (≥ 0.8)
+  - Schema.org structured data (1.0)
+  - JSON-LD extraction (0.9)
+- 🟡 Medium Confidence (≥ 0.6)
+  - Wild mode pattern matching (0.7)
+- 🟠 Low Confidence (≥ 0.4)
+  - Mixed sources with partial data
+- 🔴 Poor Confidence (< 0.4)
+  - LLM-based extraction (0.5)
+  - Missing critical fields
+
+Each recipe import includes detailed information about:
+- Overall confidence score
+- Source of each extracted field
+- Parsing methods used
+- Warnings or issues encountered
+- Timestamp of extraction
 
 ## Project Structure
 
@@ -38,6 +65,16 @@ notion_recipe_lambda/
 │   └── run_tests.sh          # Test runner
 └── .env                # Environment variables (not in repo)
 ```
+
+## Dependencies
+
+Key dependencies include:
+- `recipe-scrapers`: Core recipe extraction
+- `extruct`: JSON-LD and microdata extraction
+- `w3lib`: HTML processing
+- `notion-client`: Notion API integration
+- `requests`: HTTP client with retry support
+- `python-dotenv`: Environment variable management
 
 ## Setup
 
@@ -98,31 +135,29 @@ pytest tests/test_recipe_importer.py
    - Enable CORS if needed
    - Deploy the API
 
-6. Configure Notion Webhook:
-   - Set up webhook in your Notion integration
-   - Configure webhook to trigger on page updates
-   - Point webhook to your API Gateway endpoint
+## Recent Changes
 
-## Development
+- ✨ Added multi-layered recipe extraction with confidence scoring
+- 🎯 Implemented JSON-LD extraction as high-confidence source
+- 📊 Enhanced confidence scoring system with source hierarchy
+- 🔍 Improved recipe field extraction and validation
+- 📝 Added detailed import information to Notion pages
+- 🐛 Fixed issues with recipe schema extraction
+- 🔧 Improved error handling and logging
 
-### Building
-The project uses Docker to ensure consistent builds for AWS Lambda:
-```bash
-./build.sh  # Creates lambda_function.zip
-```
+## Next Steps
 
-### Testing
-Run the test suite:
-```bash
-./tests/run_tests.sh
-```
-
-### Adding New Features
-1. Update `lambda_function.py`
-2. Add tests in `tests/`
-3. Update documentation
-4. Build and test locally
-5. Deploy to AWS Lambda
+- [ ] Add support for recipe images in Notion pages
+- [ ] Implement rate limiting for recipe scraping
+- [ ] Add support for custom cuisine/category mappings
+- [ ] Create CloudFormation template for easier deployment
+- [ ] Add integration tests for major recipe websites
+- [ ] Set up CI/CD pipeline
+- [ ] Add support for batch recipe imports
+- [ ] Improve error reporting and notifications
+- [ ] Add webhook security best practices
+- [ ] Implement webhook signature verification
+- [ ] Add monitoring for webhook failures
 
 ## Contributing
 
@@ -132,6 +167,17 @@ Contributions are welcome! Please:
 3. Add tests for new features
 4. Ensure all tests pass
 5. Submit a pull request
+
+## Credits
+
+This project relies on several excellent open-source libraries:
+
+- [recipe-scrapers](https://github.com/hhursev/recipe-scrapers) - A powerful Python package for scraping recipes from the web, supporting 300+ sites
+- [notion-client](https://github.com/ramnes/notion-client) - Official Notion SDK for Python
+- [extruct](https://github.com/scrapinghub/extruct) - Library for extracting embedded metadata from HTML markup
+- [w3lib](https://github.com/scrapy/w3lib) - Library of web-related functions
+
+Special thanks to all the maintainers and contributors of these projects.
 
 ## License
 
