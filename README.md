@@ -21,65 +21,144 @@ A serverless AWS Lambda function that imports recipes from various recipe websit
 - 🚀 Deployed as an AWS Lambda function
 - 🔒 Secure handling of API keys through environment variables
 
+## Project Structure
+
+```
+notion_recipe_lambda/
+├── lambda_function.py     # Main Lambda function
+├── Dockerfile            # Docker build configuration
+├── build.sh             # Build script
+├── requirements.txt     # Python dependencies
+├── tests/              # Test suite
+│   ├── README.md                # Test documentation
+│   ├── test_recipe_importer.py  # Unit tests
+│   ├── test_lambda.py          # Integration tests
+│   ├── test-event.json        # Test data
+│   ├── notion_webhook_example # Example data
+│   └── run_tests.sh          # Test runner
+└── .env                # Environment variables (not in repo)
+```
+
 ## Setup
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yogonwa/RecipeImporter.git
-cd RecipeImporter
+git clone https://github.com/yourusername/notion_recipe_lambda.git
+cd notion_recipe_lambda
 ```
 
-2. Create a virtual environment and install dependencies:
+2. Set up environment variables in `.env`:
 ```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-pip install -r requirements.txt
-```
-
-3. Set up environment variables in `.env`:
-```
 NOTION_API_KEY=your_notion_api_key
 NOTION_DATABASE_ID=your_database_id
 ```
 
-4. Build the Lambda deployment package:
+3. Build the Lambda package:
 ```bash
 chmod +x build.sh
 ./build.sh
 ```
 
+## Testing
+
+The project includes a comprehensive test suite. See [tests/README.md](tests/README.md) for detailed testing instructions.
+
+Quick start:
+```bash
+# Run all tests with coverage
+./tests/run_tests.sh
+
+# Run specific test file
+pytest tests/test_recipe_importer.py
+```
+
 ## Deployment
 
-1. Create a new Lambda function in AWS:
+1. Build the Lambda package:
+```bash
+./build.sh
+```
+
+2. Create a new Lambda function in AWS:
    - Runtime: Python 3.9
    - Architecture: x86_64
    - Memory: 256 MB (recommended)
    - Timeout: 30 seconds (recommended)
 
-2. Upload the deployment package:
+3. Upload the deployment package:
    - Upload `lambda_function.zip` to your Lambda function
 
-3. Configure environment variables in Lambda:
+4. Configure environment variables in Lambda:
    - Add `NOTION_API_KEY` and `NOTION_DATABASE_ID`
 
-4. Set up API Gateway (TODO):
+5. Set up API Gateway:
    - Create a new HTTP API
    - Configure Lambda integration
    - Set up security (API key, IAM, etc.)
    - Enable CORS if needed
    - Deploy the API
 
-5. Configure Notion Webhook (TODO):
+6. Configure Notion Webhook:
    - Set up webhook in your Notion integration
    - Configure webhook to trigger on page updates
    - Point webhook to your API Gateway endpoint
-   - Test webhook connectivity
 
-## Testing
+## Development
 
-Run the test script:
+### Building
+The project uses Docker to ensure consistent builds for AWS Lambda:
 ```bash
-python test_lambda.py
+./build.sh  # Creates lambda_function.zip
+```
+
+### Testing
+Run the test suite:
+```bash
+./tests/run_tests.sh
+```
+
+### Adding New Features
+1. Update `lambda_function.py`
+2. Add tests in `tests/`
+3. Update documentation
+4. Build and test locally
+5. Deploy to AWS Lambda
+
+## Contributing
+
+Contributions are welcome! Please:
+1. Fork the repository
+2. Create a feature branch
+3. Add tests for new features
+4. Ensure all tests pass
+5. Submit a pull request
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Architecture
+
+```
+                                   ┌─────────────┐
+                                   │             │
+                                   │   Notion    │
+                                   │  Database   │
+                                   │             │
+                                   └──────┬──────┘
+                                          │
+                                          │ Webhook
+                                          ▼
+┌─────────────┐    HTTPS    ┌──────────────────┐    Invoke    ┌─────────────┐
+│   Notion    │─────────────▶│   API Gateway   │─────────────▶│   Lambda    │
+│  Webhook    │             │      (TODO)      │             │  Function   │
+└─────────────┘             └──────────────────┘             └─────────────┘
+                                                                    │
+                                                                    │
+                                                              ┌─────▼─────┐
+                                                              │  Recipe   │
+                                                              │ Websites  │
+                                                              └───────────┘
 ```
 
 ## Recent Changes
@@ -107,30 +186,6 @@ python test_lambda.py
 - [ ] Implement webhook signature verification
 - [ ] Add monitoring for webhook failures
 
-## Architecture
-
-```
-                                   ┌─────────────┐
-                                   │             │
-                                   │   Notion    │
-                                   │  Database   │
-                                   │             │
-                                   └──────┬──────┘
-                                          │
-                                          │ Webhook
-                                          ▼
-┌─────────────┐    HTTPS    ┌──────────────────┐    Invoke    ┌─────────────┐
-│   Notion    │─────────────▶│   API Gateway   │─────────────▶│   Lambda    │
-│  Webhook    │             │      (TODO)      │             │  Function   │
-└─────────────┘             └──────────────────┘             └─────────────┘
-                                                                    │
-                                                                    │
-                                                              ┌─────▼─────┐
-                                                              │  Recipe   │
-                                                              │ Websites  │
-                                                              └───────────┘
-```
-
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
@@ -144,7 +199,15 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 ```
 notion_recipe_lambda/
 ├── lambda_function.py     # Main Lambda function
-├── run_tests.sh          # Test script
-├── requirements.txt      # Python dependencies
-└── .env                 # Environment variables (not in repo)
+├── Dockerfile            # Docker build configuration
+├── build.sh             # Build script
+├── requirements.txt     # Python dependencies
+├── tests/              # Test suite
+│   ├── README.md                # Test documentation
+│   ├── test_recipe_importer.py  # Unit tests
+│   ├── test_lambda.py          # Integration tests
+│   ├── test-event.json        # Test data
+│   ├── notion_webhook_example # Example data
+│   └── run_tests.sh          # Test runner
+└── .env                # Environment variables (not in repo)
 ``` 

@@ -1,0 +1,26 @@
+{
+  "/*": "Test Event for Recipe Importer Lambda",
+  "description": "This JSON file contains sample events for testing the Lambda function",
+  "usage": "Used by test_lambda.py for integration testing",
+  "event_types": [
+    "Notion webhook event",
+    "API Gateway event"
+  ],
+  "body": {
+    "page": {
+      "id": "test-page-id",
+      "properties": {
+        "Link": {
+          "type": "url",
+          "url": "https://www.allrecipes.com/recipe/24074/alysias-basic-meat-lasagna/"
+        },
+        "Unique ID": {
+          "unique_id": {
+            "prefix": "CB",
+            "number": 123
+          }
+        }
+      }
+    }
+  }
+} 
