@@ -9,10 +9,31 @@ from notion_client import Client
 from notion_client.errors import APIResponseError
 from datetime import datetime
 import requests
+import time
+from requests.adapters import HTTPAdapter
+from requests.packages.urllib3.util.retry import Retry
 
 # Configure logging
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
+
+# Configure requests session with retries and headers
+def create_requests_session():
+    session = requests.Session()
+    retries = Retry(
+        total=3,
+        backoff_factor=0.5,
+        status_forcelist=[429, 500, 502, 503, 504],
+    )
+    session.mount('http://', HTTPAdapter(max_retries=retries))
+    session.mount('https://', HTTPAdapter(max_retries=retries))
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    })
+    return session
+
+# Use the session for requests
+session = create_requests_session()
 
 # Notion configuration
 NOTION_API_KEY = os.environ.get('NOTION_API_KEY')
@@ -135,25 +156,74 @@ def extract_notion_page_info(event: Dict[str, Any]) -> Optional[Tuple[str, str]]
         logger.error(f"Error extracting page info: {str(e)}")
         return None
 
-def create_import_details_block(parsing_methods: Dict[str, str], timestamp: str) -> Dict[str, Any]:
+def create_import_details_block(recipe_data: Dict[str, Any]) -> Dict[str, Any]:
     """
     Create a collapsible import details block showing how each field was parsed.
+    Includes confidence score and parsing methods for each field.
     
     Args:
-        parsing_methods: Dict mapping field names to their parsing method
-        timestamp: ISO format timestamp of when parsing occurred
+        recipe_data: Dictionary containing recipe data, parsing methods, and confidence score
     """
-    details_text = "Import Details:\n"
+    # Get confidence score and determine confidence level
+    confidence_score = recipe_data.get("confidence_score", 0.0)
+    if confidence_score >= 0.8:
+        confidence_emoji = "🟢"  # High confidence
+        confidence_text = "High Confidence"
+    elif confidence_score >= 0.6:
+        confidence_emoji = "🟡"  # Medium confidence
+        confidence_text = "Medium Confidence"
+    elif confidence_score >= 0.4:
+        confidence_emoji = "🟠"  # Low confidence
+        confidence_text = "Low Confidence"
+    else:
+        confidence_emoji = "🔴"  # Poor confidence
+        confidence_text = "Poor Confidence"
+
+    # Create the details text with confidence score header
+    details_text = f"Confidence Score: {confidence_emoji} {confidence_score:.2f} ({confidence_text})\n\n"
+    details_text += "Parsing Methods:\n"
+
+    # Add parsing method for each field with emojis
+    method_emojis = {
+        "schema.org": "✨",  # Best source
+        "wild_mode": "🔍",   # Good source
+        "llm": "🤖",        # AI fallback
+        "NOT_FOUND": "❌",   # Not found
+        "ERROR": "⚠️"       # Error occurred
+    }
+
+    # Group fields by their source
+    fields_by_source = {}
+    parsing_methods = recipe_data.get("parsing_methods", {})
+    
     for field, method in parsing_methods.items():
-        details_text += f"- {field}: {method}\n"
-    details_text += f"Timestamp: {timestamp}"
+        if field != "all_fields":  # Skip the all_fields entry
+            if method not in fields_by_source:
+                fields_by_source[method] = []
+            fields_by_source[method].append(field)
+
+    # Add fields grouped by source
+    for method in ["schema.org", "wild_mode", "llm", "NOT_FOUND", "ERROR"]:
+        if method in fields_by_source:
+            emoji = method_emojis.get(method, "")
+            fields = fields_by_source[method]
+            details_text += f"\n{emoji} {method}:\n"
+            for field in sorted(fields):
+                details_text += f"  • {field}\n"
+
+    # Add warning if present
+    if "warning" in recipe_data:
+        details_text += f"\n⚠️ Warning: {recipe_data['warning']}\n"
+
+    # Add timestamp
+    details_text += f"\n🕒 Parsed: {recipe_data.get('parse_timestamp', 'Unknown time')}"
     
     return {
         "type": "toggle",
         "toggle": {
             "rich_text": [{
                 "type": "text",
-                "text": {"content": "🔍 Import Details"}
+                "text": {"content": f"🔍 Import Details ({confidence_emoji} {confidence_score:.2f})"}
             }],
             "children": [{
                 "type": "paragraph",
@@ -202,33 +272,296 @@ def extract_recipe_with_gpt(html_content: str) -> Dict[str, Any]:
         logger.error(f"GPT extraction failed: {str(e)}")
         return None
 
-def scrape_recipe(url: str) -> Dict[str, Any]:
+def calculate_confidence_score(recipe_data: Dict[str, Any]) -> float:
     """
-    Scrape recipe data with multiple fallback methods.
+    Calculate a confidence score (0-1) for the recipe data quality.
+    
+    Scoring weights:
+    - Required fields (0.7 total):
+      * Title: 0.2
+      * Ingredients: 0.25
+      * Instructions: 0.25
+    - Optional fields (0.3 total):
+      * Image: 0.1
+      * Time/Yield: 0.1
+      * Cuisine/Category: 0.05
+      * Nutrients: 0.05
+    
+    Source quality multipliers:
+    - schema.org: 1.0
+    - wild_mode: 0.8
+    - llm: 0.6
+    """
+    score = 0.0
+    parsing_methods = recipe_data.get("parsing_methods", {})
+    
+    # Required fields scoring
+    required_weights = {
+        "title": 0.20,
+        "ingredients": 0.25,
+        "instructions": 0.25
+    }
+    
+    # Optional fields scoring
+    optional_weights = {
+        "image": 0.10,
+        "total_time": 0.05,
+        "yields": 0.05,
+        "cuisine": 0.025,
+        "category": 0.025,
+        "nutrients": 0.05
+    }
+    
+    # Source quality multipliers
+    source_multipliers = {
+        "schema.org": 1.0,
+        "wild_mode": 0.8,
+        "llm": 0.6,
+        "NOT_FOUND": 0.0,
+        "ERROR": 0.0
+    }
+    
+    # Score required fields
+    for field, weight in required_weights.items():
+        if field in recipe_data and recipe_data[field]:
+            source = parsing_methods.get(field, "ERROR")
+            multiplier = source_multipliers.get(source, 0.5)
+            score += weight * multiplier
+    
+    # Score optional fields
+    for field, weight in optional_weights.items():
+        if field in recipe_data and recipe_data[field]:
+            source = parsing_methods.get(field, "ERROR")
+            multiplier = source_multipliers.get(source, 0.5)
+            score += weight * multiplier
+    
+    return round(score, 2)
+
+def try_standard_scraping(url: str) -> Dict[str, Any]:
+    """
+    Attempt to scrape recipe using recipe-scrapers' standard mode (Schema.org JSON-LD).
+    Returns recipe data with parsing methods or None if failed.
     """
     try:
-        # Try standard scraping first
+        scraper = scrape_me(url)
+        
+        # Track which fields were found and their sources
+        parsing_methods = {}
+        recipe_data = {
+            "url": url,
+            "host": scraper.host(),
+            "parsing_methods": parsing_methods,
+            "parse_timestamp": datetime.now().isoformat()
+        }
+        
+        # Required fields - must have these for valid recipe
+        required_fields = {
+            "title": scraper.title,
+            "ingredients": scraper.ingredients,
+            "instructions": scraper.instructions
+        }
+        
+        # Optional fields - nice to have but not required
+        optional_fields = {
+            "total_time": scraper.total_time,
+            "yields": scraper.yields,
+            "image": scraper.image,
+            "nutrients": scraper.nutrients,
+            "cuisine": scraper.cuisine,
+            "category": scraper.category
+        }
+        
+        # Check required fields
+        missing_required = []
+        for field, method in required_fields.items():
+            try:
+                value = method()
+                if value:
+                    recipe_data[field] = value
+                    parsing_methods[field] = "schema.org"
+                else:
+                    missing_required.append(field)
+            except Exception as e:
+                missing_required.append(field)
+                logger.warning(f"Failed to extract required field {field}: {str(e)}")
+        
+        # Check optional fields
+        for field, method in optional_fields.items():
+            try:
+                value = method()
+                if value:
+                    recipe_data[field] = value
+                    parsing_methods[field] = "schema.org"
+                else:
+                    parsing_methods[field] = "NOT_FOUND"
+            except Exception as e:
+                parsing_methods[field] = "ERROR"
+                logger.warning(f"Failed to extract optional field {field}: {str(e)}")
+        
+        # Calculate confidence score
+        recipe_data["confidence_score"] = calculate_confidence_score(recipe_data)
+        
+        # If any required fields are missing, return partial data for fallback
+        if missing_required:
+            recipe_data["missing_required"] = missing_required
+            return recipe_data
+            
+        return recipe_data
+        
+    except Exception as e:
+        logger.error(f"Standard scraping failed: {str(e)}")
+        return None
+
+def try_wild_mode_scraping(url: str) -> Dict[str, Any]:
+    """
+    Attempt to scrape recipe using recipe-scrapers' wild mode.
+    Returns recipe data with parsing methods or None if failed.
+    """
+    try:
+        # Create a new scraper instance without wild mode
+        scraper = scrape_me(url)
+        
+        # Enable wild mode through the wild_mode property
+        scraper.wild_mode = True
+        
+        # Track which fields were found and their sources
+        parsing_methods = {}
+        recipe_data = {
+            "url": url,
+            "host": scraper.host(),
+            "parsing_methods": parsing_methods,
+            "parse_timestamp": datetime.now().isoformat()
+        }
+        
+        # Try to extract all fields using wild mode
+        field_methods = {
+            "title": scraper.title,
+            "ingredients": scraper.ingredients,
+            "instructions": scraper.instructions,
+            "total_time": scraper.total_time,
+            "yields": scraper.yields,
+            "image": scraper.image,
+            "nutrients": scraper.nutrients,
+            "cuisine": scraper.cuisine,
+            "category": scraper.category
+        }
+        
+        for field, method in field_methods.items():
+            try:
+                value = method()
+                if value:
+                    recipe_data[field] = value
+                    parsing_methods[field] = "wild_mode"
+            except Exception as e:
+                parsing_methods[field] = "NOT_FOUND"
+                logger.warning(f"Wild mode failed to extract {field}: {str(e)}")
+        
+        # Calculate confidence score
+        recipe_data["confidence_score"] = calculate_confidence_score(recipe_data)
+        
+        return recipe_data
+        
+    except Exception as e:
+        logger.error(f"Wild mode scraping failed: {str(e)}")
+        return None
+
+def scrape_recipe(url: str) -> Dict[str, Any]:
+    """
+    Scrape recipe data with multiple fallback methods and confidence thresholds.
+    Returns recipe data with parsing methods and timestamps.
+    
+    Confidence thresholds:
+    - High (>= 0.8): All required fields from schema.org
+    - Medium (>= 0.6): All required fields from mix of sources
+    - Low (>= 0.4): Most required fields, some optional
+    - Poor (< 0.4): Missing required fields
+    """
+    try:
+        best_data = None
+        best_score = 0.0
+        
+        # Step 1: Try standard scraping (Schema.org JSON-LD)
         recipe_data = try_standard_scraping(url)
-        if recipe_data and not recipe_data.get("error"):
-            return recipe_data
-            
-        # If standard scraping fails, try wild mode
-        recipe_data = try_wild_mode_scraping(url)
-        if recipe_data and not recipe_data.get("error"):
-            return recipe_data
-            
-        # If both fail, try GPT-based extraction
-        html_content = requests.get(url).text
-        recipe_data = extract_recipe_with_gpt(html_content)
+        
         if recipe_data:
-            recipe_data["url"] = url
-            return recipe_data
+            score = recipe_data["confidence_score"]
+            if score >= 0.8:  # High confidence threshold
+                logger.info(f"High confidence recipe data (score: {score}) from Schema.org")
+                return recipe_data
             
-        return {"error": "All extraction methods failed"}
+            best_data = recipe_data
+            best_score = score
+        
+        # Step 2: Try wild mode scraping
+        wild_data = try_wild_mode_scraping(url)
+        
+        if wild_data:
+            # If we have previous data, try to merge and improve score
+            if best_data:
+                # Merge wild mode data into best_data where missing
+                for field, value in wild_data.items():
+                    if field not in best_data or not best_data[field]:
+                        best_data[field] = value
+                        best_data["parsing_methods"][field] = "wild_mode"
+                
+                # Recalculate confidence score after merge
+                best_data["confidence_score"] = calculate_confidence_score(best_data)
+                
+                if best_data["confidence_score"] >= 0.6:  # Medium confidence threshold
+                    logger.info(f"Medium confidence recipe data (score: {best_data['confidence_score']}) from merged sources")
+                    return best_data
+            else:
+                best_data = wild_data
+                best_score = wild_data["confidence_score"]
+        
+        # Step 3: Try LLM extraction if confidence is still low
+        if not best_data or best_score < 0.4:  # Low confidence threshold
+            logger.info("Low confidence in current data, attempting LLM extraction")
+            try:
+                response = session.get(url, timeout=10)
+                response.raise_for_status()
+                html_content = response.text
+                llm_data = extract_recipe_with_gpt(html_content)
+                
+                if llm_data:
+                    if best_data:
+                        # Merge LLM data into best_data where missing
+                        for field, value in llm_data.items():
+                            if field not in best_data or not best_data[field]:
+                                best_data[field] = value
+                                best_data["parsing_methods"][field] = "llm"
+                        
+                        # Recalculate confidence score
+                        best_data["confidence_score"] = calculate_confidence_score(best_data)
+                    else:
+                        best_data = llm_data
+                        best_data["url"] = url
+                        best_data["confidence_score"] = calculate_confidence_score(llm_data)
+            except Exception as e:
+                logger.error(f"Failed to fetch HTML content: {str(e)}")
+        
+        # Return best available data with confidence information
+        if best_data:
+            score = best_data["confidence_score"]
+            if score < 0.4:
+                best_data["warning"] = "Low confidence in extracted data"
+            return best_data
+        
+        return {
+            "error": "All extraction methods failed",
+            "url": url,
+            "confidence_score": 0.0
+        }
         
     except Exception as e:
         logger.error(f"Recipe extraction failed: {str(e)}")
-        return {"error": str(e)}
+        return {
+            "error": str(e),
+            "url": url,
+            "parse_timestamp": datetime.now().isoformat(),
+            "parsing_methods": {"all_fields": "ERROR"},
+            "confidence_score": 0.0
+        }
 
 def create_notion_blocks(recipe_data: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
@@ -322,28 +655,10 @@ def create_notion_blocks(recipe_data: Dict[str, Any]) -> List[Dict[str, Any]]:
             }
         ])
 
-        # Nutrition label mapping and order
-        nutrition_mapping = {
-            'calories': 'Calories',
-            'carbohydrateContent': 'Carbs',
-            'proteinContent': 'Protein',
-            'fatContent': 'Fat',
-            'unsaturatedFatContent': 'Unsat Fat',
-            'saturatedFatContent': 'Sat Fat',
-            'fiberContent': 'Fiber',
-            'sugarContent': 'Sugar',
-            'sodiumContent': 'Sodium',
-            'cholesterolContent': 'Cholesterol',
-            'servingSize': 'Serving Size'
-        }
-
-        # Format nutrition information in specified order
+        # Format nutrition information
         nutrition_lines = []
-        for key in nutrition_mapping:
-            if key in recipe_data['nutrients']:
-                value = recipe_data['nutrients'][key]
-                label = nutrition_mapping[key]
-                nutrition_lines.append(f"{label}: {value}")
+        for key, value in recipe_data['nutrients'].items():
+            nutrition_lines.append(f"{key}: {value}")
 
         if nutrition_lines:
             right_column.append({
@@ -382,8 +697,15 @@ def create_notion_blocks(recipe_data: Dict[str, Any]) -> List[Dict[str, Any]]:
             }
         ])
 
+        # Split instructions into steps if it's a string
+        if isinstance(recipe_data['instructions'], str):
+            # Split on newlines and filter out empty lines
+            steps = [step.strip() for step in recipe_data['instructions'].split('\n') if step.strip()]
+        else:
+            steps = recipe_data['instructions']
+
         # Add each instruction step as a numbered list item
-        for step in recipe_data['instructions']:
+        for step in steps:
             if isinstance(step, str) and step.strip():
                 blocks.append({
                     "type": "numbered_list_item",
@@ -395,6 +717,15 @@ def create_notion_blocks(recipe_data: Dict[str, Any]) -> List[Dict[str, Any]]:
                         "color": "default"
                     }
                 })
+
+    # Add divider before import details
+    blocks.append({
+        "type": "divider",
+        "divider": {}
+    })
+
+    # Add import details block
+    blocks.append(create_import_details_block(recipe_data))
 
     return blocks
 
@@ -595,12 +926,20 @@ def update_notion_page(page_id: str, recipe_data: Dict[str, Any]) -> None:
     except Exception as e:
         logger.warning(f"Error cleaning up existing blocks: {e}")
 
-    # Finally, add the new content blocks
+    # Create content blocks
+    content_blocks = create_notion_blocks(recipe_data)
+
+    # Split blocks into chunks of 100
+    def chunk_blocks(blocks, size=100):
+        return [blocks[i:i + size] for i in range(0, len(blocks), size)]
+
+    # Add blocks in chunks
     try:
-        notion.blocks.children.append(
-            block_id=page_id,
-            children=create_notion_blocks(recipe_data)
-        )
+        for chunk in chunk_blocks(content_blocks):
+            notion.blocks.children.append(
+                block_id=page_id,
+                children=chunk
+            )
         logger.info("Successfully added new content blocks")
     except Exception as e:
         logger.error(f"Error adding content blocks: {e}")
@@ -617,23 +956,61 @@ def lambda_handler(event, context):
         # Extract page info from the event
         page_info = extract_notion_page_info(event)
         if not page_info:
-            raise ValueError("Failed to extract page info from event")
+            return {
+                'statusCode': 400,
+                'body': json.dumps({
+                    'error': 'Failed to extract page info from event'
+                })
+            }
 
         # Unpack the tuple
         page_id, url = page_info
 
         if not url or not page_id:
-            raise ValueError(f"Missing required fields. URL: {url}, Page ID: {page_id}")
+            return {
+                'statusCode': 400,
+                'body': json.dumps({
+                    'error': f'Missing required fields. URL: {url}, Page ID: {page_id}'
+                })
+            }
 
         if not is_valid_url(url):
-            raise ValueError(f"Invalid URL format: {url}")
+            # Create Notion page with invalid URL error
+            error_data = {
+                "title": "Invalid URL",
+                "host": url,
+                "url": url,
+                "parse_timestamp": datetime.now().isoformat(),
+                "parsing_methods": {"all_fields": "ERROR"},
+                "confidence_score": 0.0,
+                "error": f"Invalid URL format: {url}"
+            }
+            update_notion_page(page_id, error_data)
+            return {
+                'statusCode': 200,  # Return success since we updated Notion
+                'body': json.dumps({
+                    'message': 'Created error page in Notion',
+                    'page_id': page_id,
+                    'url': url
+                })
+            }
 
-        # Scrape recipe data
+        # Attempt to scrape recipe data
         recipe_data = scrape_recipe(url)
+        
+        # Even if scraping failed, we'll update the Notion page with what we have
         if not recipe_data:
-            raise ValueError("Failed to scrape recipe data")
+            recipe_data = {
+                "title": "Recipe Parsing Failed",
+                "host": url,
+                "url": url,
+                "parse_timestamp": datetime.now().isoformat(),
+                "parsing_methods": {"all_fields": "ERROR"},
+                "confidence_score": 0.0,
+                "error": "Failed to extract any recipe data"
+            }
 
-        # Update Notion page
+        # Update Notion page with whatever data we have (success or failure)
         update_notion_page(page_id, recipe_data)
 
         return {
@@ -641,23 +1018,33 @@ def lambda_handler(event, context):
             'body': json.dumps({
                 'message': 'Successfully processed recipe',
                 'page_id': page_id,
-                'url': url
+                'url': url,
+                'confidence_score': recipe_data.get('confidence_score', 0.0)
             })
         }
 
-    except ValueError as e:
-        logger.error(f"Validation error: {str(e)}")
-        return {
-            'statusCode': 400,
-            'body': json.dumps({
-                'error': str(e)
-            })
-        }
     except Exception as e:
         logger.error(f"Unexpected error: {str(e)}", exc_info=True)
+        try:
+            # Try to create an error page in Notion
+            error_data = {
+                "title": "Processing Error",
+                "host": url if 'url' in locals() else "Unknown",
+                "url": url if 'url' in locals() else "Unknown",
+                "parse_timestamp": datetime.now().isoformat(),
+                "parsing_methods": {"all_fields": "ERROR"},
+                "confidence_score": 0.0,
+                "error": f"Internal error: {str(e)}"
+            }
+            if 'page_id' in locals():
+                update_notion_page(page_id, error_data)
+        except Exception as notion_error:
+            logger.error(f"Failed to create error page in Notion: {str(notion_error)}")
+
         return {
-            'statusCode': 500,
+            'statusCode': 200,  # Return success since we tried our best
             'body': json.dumps({
-                'error': 'Internal server error'
+                'message': 'Created error page in Notion',
+                'error': str(e)
             })
         }
