@@ -12,6 +12,8 @@ import requests
 import time
 from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
+import extruct
+from w3lib.html import get_base_url
 
 # Configure logging
 logger = logging.getLogger()
@@ -288,9 +290,10 @@ def calculate_confidence_score(recipe_data: Dict[str, Any]) -> float:
       * Nutrients: 0.05
     
     Source quality multipliers:
-    - schema.org: 1.0
-    - wild_mode: 0.8
-    - llm: 0.6
+    - schema.org: 1.0 (highest - official recipe-scrapers)
+    - json-ld: 0.9 (high - direct structured data)
+    - wild_mode: 0.7 (medium - pattern matching)
+    - llm: 0.5 (lowest - AI extraction)
     """
     score = 0.0
     parsing_methods = recipe_data.get("parsing_methods", {})
@@ -314,9 +317,10 @@ def calculate_confidence_score(recipe_data: Dict[str, Any]) -> float:
     
     # Source quality multipliers
     source_multipliers = {
-        "schema.org": 1.0,
-        "wild_mode": 0.8,
-        "llm": 0.6,
+        "schema.org": 1.0,  # Highest - official recipe-scrapers
+        "json-ld": 0.9,    # High - direct structured data
+        "wild_mode": 0.7,  # Medium - pattern matching
+        "llm": 0.5,        # Lowest - AI extraction
         "NOT_FOUND": 0.0,
         "ERROR": 0.0
     }
@@ -465,22 +469,128 @@ def try_wild_mode_scraping(url: str) -> Dict[str, Any]:
         logger.error(f"Wild mode scraping failed: {str(e)}")
         return None
 
+def extract_json_ld(url: str) -> Optional[Dict[str, Any]]:
+    """
+    Directly extract JSON-LD recipe data from a webpage.
+    Falls back to this when recipe-scrapers fails.
+    """
+    try:
+        # Fetch the webpage
+        response = session.get(url, timeout=10)
+        response.raise_for_status()
+        html_content = response.text
+        
+        logger.info(f"Successfully fetched content from {url}")
+        
+        # Extract all structured data
+        base_url = get_base_url(html_content, response.url)
+        data = extruct.extract(html_content, base_url=base_url, syntaxes=['json-ld'])
+        
+        logger.info(f"Found {len(data.get('json-ld', []))} JSON-LD blocks")
+        
+        # Look for recipe data in JSON-LD
+        if 'json-ld' in data and data['json-ld']:
+            for json_ld_block in data['json-ld']:
+                # Check if we have a @graph array
+                if '@graph' in json_ld_block:
+                    logger.info("Found @graph array in JSON-LD")
+                    for item in json_ld_block['@graph']:
+                        if isinstance(item, dict) and item.get('@type') in ['Recipe', 'schema:Recipe']:
+                            logger.info("Found Recipe schema in @graph")
+                            return process_recipe_schema(item, url)
+                # Check if this block itself is a Recipe
+                elif isinstance(json_ld_block, dict) and json_ld_block.get('@type') in ['Recipe', 'schema:Recipe']:
+                    logger.info("Found Recipe schema in root")
+                    return process_recipe_schema(json_ld_block, url)
+                    
+        logger.warning("No Recipe schema found in JSON-LD data")
+        return None
+        
+    except Exception as e:
+        logger.error(f"JSON-LD extraction failed: {str(e)}")
+        return None
+
+def process_recipe_schema(item: Dict[str, Any], url: str) -> Dict[str, Any]:
+    """
+    Process a Recipe schema and convert it to our internal format.
+    """
+    recipe_data = {
+        "url": url,
+        "host": urlparse(url).netloc,
+        "parsing_methods": {},
+        "parse_timestamp": datetime.now().isoformat()
+    }
+    
+    # Map required fields
+    if 'name' in item:
+        recipe_data['title'] = item['name']
+        recipe_data['parsing_methods']['title'] = 'json-ld'
+    
+    if 'recipeIngredient' in item:
+        recipe_data['ingredients'] = item['recipeIngredient']
+        recipe_data['parsing_methods']['ingredients'] = 'json-ld'
+    
+    if 'recipeInstructions' in item:
+        # Handle both string and structured instructions
+        instructions = []
+        for instruction in item['recipeInstructions']:
+            if isinstance(instruction, str):
+                instructions.append(instruction)
+            elif isinstance(instruction, dict) and 'text' in instruction:
+                instructions.append(instruction['text'])
+        recipe_data['instructions'] = instructions if instructions else item['recipeInstructions']
+        recipe_data['parsing_methods']['instructions'] = 'json-ld'
+    
+    # Map optional fields
+    if 'image' in item:
+        recipe_data['image'] = item['image'][0] if isinstance(item['image'], list) else item['image']
+        recipe_data['parsing_methods']['image'] = 'json-ld'
+    
+    if 'totalTime' in item:
+        try:
+            # Convert ISO duration to minutes
+            from isodate import parse_duration
+            duration = parse_duration(item['totalTime'])
+            recipe_data['total_time'] = duration.total_seconds() / 60
+            recipe_data['parsing_methods']['total_time'] = 'json-ld'
+        except Exception as e:
+            logger.warning(f"Failed to parse totalTime: {e}")
+    
+    if 'recipeYield' in item:
+        recipe_data['yields'] = item['recipeYield']
+        recipe_data['parsing_methods']['yields'] = 'json-ld'
+    
+    if 'recipeCuisine' in item:
+        recipe_data['cuisine'] = item['recipeCuisine']
+        recipe_data['parsing_methods']['cuisine'] = 'json-ld'
+    
+    if 'recipeCategory' in item:
+        recipe_data['category'] = item['recipeCategory']
+        recipe_data['parsing_methods']['category'] = 'json-ld'
+    
+    if 'nutrition' in item:
+        nutrition = item['nutrition']
+        recipe_data['nutrients'] = {
+            key.replace('Content', ''): value 
+            for key, value in nutrition.items() 
+            if key.endswith('Content')
+        }
+        recipe_data['parsing_methods']['nutrients'] = 'json-ld'
+    
+    # Calculate confidence score
+    recipe_data['confidence_score'] = calculate_confidence_score(recipe_data)
+    
+    return recipe_data
+
 def scrape_recipe(url: str) -> Dict[str, Any]:
     """
     Scrape recipe data with multiple fallback methods and confidence thresholds.
-    Returns recipe data with parsing methods and timestamps.
-    
-    Confidence thresholds:
-    - High (>= 0.8): All required fields from schema.org
-    - Medium (>= 0.6): All required fields from mix of sources
-    - Low (>= 0.4): Most required fields, some optional
-    - Poor (< 0.4): Missing required fields
     """
     try:
         best_data = None
         best_score = 0.0
         
-        # Step 1: Try standard scraping (Schema.org JSON-LD)
+        # Step 1: Try standard scraping (Schema.org JSON-LD via recipe-scrapers)
         recipe_data = try_standard_scraping(url)
         
         if recipe_data:
@@ -492,7 +602,22 @@ def scrape_recipe(url: str) -> Dict[str, Any]:
             best_data = recipe_data
             best_score = score
         
-        # Step 2: Try wild mode scraping
+        # Step 2: Try direct JSON-LD extraction if recipe-scrapers failed
+        if not best_data or best_score < 0.8:
+            logger.info("Attempting direct JSON-LD extraction")
+            json_ld_data = extract_json_ld(url)
+            
+            if json_ld_data:
+                score = json_ld_data["confidence_score"]
+                if score >= 0.8:  # High confidence threshold
+                    logger.info(f"High confidence recipe data (score: {score}) from direct JSON-LD")
+                    return json_ld_data
+                
+                if not best_data or score > best_score:
+                    best_data = json_ld_data
+                    best_score = score
+        
+        # Step 3: Try wild mode scraping
         wild_data = try_wild_mode_scraping(url)
         
         if wild_data:
@@ -514,7 +639,7 @@ def scrape_recipe(url: str) -> Dict[str, Any]:
                 best_data = wild_data
                 best_score = wild_data["confidence_score"]
         
-        # Step 3: Try LLM extraction if confidence is still low
+        # Step 4: Try LLM extraction if confidence is still low
         if not best_data or best_score < 0.4:  # Low confidence threshold
             logger.info("Low confidence in current data, attempting LLM extraction")
             try:
