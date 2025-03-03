@@ -7,6 +7,8 @@ from recipe_scrapers import scrape_me
 from recipe_scrapers._exceptions import WebsiteNotImplementedError, NoSchemaFoundInWildMode
 from notion_client import Client
 from notion_client.errors import APIResponseError
+from datetime import datetime
+import requests
 
 # Configure logging
 logger = logging.getLogger()
@@ -45,7 +47,7 @@ def get_page_id_from_unique_id(unique_id: str) -> Optional[str]:
     if not notion or not NOTION_DATABASE_ID:
         logger.error("Notion client or database ID not configured")
         return None
-        
+
     try:
         # Parse the unique ID number from the format (e.g., "CB-11" -> 11)
         try:
@@ -53,7 +55,7 @@ def get_page_id_from_unique_id(unique_id: str) -> Optional[str]:
         except (IndexError, ValueError):
             logger.error(f"Invalid unique ID format: {unique_id}")
             return None
-            
+
         # Query the database for the page with matching unique ID number
         response = notion.databases.query(
             database_id=NOTION_DATABASE_ID,
@@ -64,14 +66,14 @@ def get_page_id_from_unique_id(unique_id: str) -> Optional[str]:
                 }
             }
         )
-        
+
         # Check if we found a matching page
         if response["results"]:
             return response["results"][0]["id"]
         else:
             logger.error(f"No page found with unique ID number: {unique_id_number}")
             return None
-            
+
     except Exception as e:
         logger.error(f"Error looking up page ID from unique ID: {str(e)}")
         return None
@@ -133,154 +135,100 @@ def extract_notion_page_info(event: Dict[str, Any]) -> Optional[Tuple[str, str]]
         logger.error(f"Error extracting page info: {str(e)}")
         return None
 
-def scrape_recipe(url: str) -> Dict[str, Any]:
+def create_import_details_block(parsing_methods: Dict[str, str], timestamp: str) -> Dict[str, Any]:
     """
-    Scrape recipe data from the given URL.
-    Returns structured recipe data.
+    Create a collapsible import details block showing how each field was parsed.
+    
+    Args:
+        parsing_methods: Dict mapping field names to their parsing method
+        timestamp: ISO format timestamp of when parsing occurred
+    """
+    details_text = "Import Details:\n"
+    for field, method in parsing_methods.items():
+        details_text += f"- {field}: {method}\n"
+    details_text += f"Timestamp: {timestamp}"
+    
+    return {
+        "type": "toggle",
+        "toggle": {
+            "rich_text": [{
+                "type": "text",
+                "text": {"content": "🔍 Import Details"}
+            }],
+            "children": [{
+                "type": "paragraph",
+                "paragraph": {
+                    "rich_text": [{
+                        "type": "text",
+                        "text": {"content": details_text}
+                    }]
+                }
+            }]
+        }
+    }
+
+def extract_recipe_with_gpt(html_content: str) -> Dict[str, Any]:
+    """
+    Use GPT to extract recipe information from raw HTML when other methods fail.
+    Returns a dictionary with recipe data or None if extraction fails.
     """
     try:
-        logger.info(f"Starting recipe scraping for URL: {url}")
+        # Note: Implementation will require adding OpenAI API integration
+        # This is a placeholder structure for the GPT-based extraction
         
-        # Initialize scraper
-        scraper = scrape_me(url)
-        logger.info(f"Scraper initialized successfully. Host: {scraper.host()}")
+        prompt = f"""Extract recipe information from the following HTML content.
+        Focus on finding:
+        1. Title
+        2. Ingredients (as a list)
+        3. Instructions (as steps)
+        4. Cooking time and servings if available
         
-        # Log schema data
-        try:
-            schema = scraper.schema
-            logger.info(f"Raw schema type: {type(schema)}")
-            
-            if not schema:
-                logger.warning("Empty schema received")
-            elif not isinstance(schema, dict):
-                logger.warning(f"Unexpected schema type: {type(schema)}")
-            else:
-                logger.info(f"Raw schema keys: {schema.keys()}")
-                logger.info(f"Schema @type: {schema.get('@type')}")
-                logger.info(f"Raw cuisine data in schema: {schema.get('recipeCuisine')}")
-                logger.info(f"Raw category data in schema: {schema.get('recipeCategory')}")
-                logger.info(f"Full schema data: {json.dumps(schema, indent=2)}")
-        except Exception as e:
-            logger.warning(f"Could not log schema data: {str(e)}")
+        HTML Content:
+        {html_content[:8000]}  # Truncate to fit token limits
+        """
         
-        # Extract and validate basic recipe data
-        title = scraper.title()
-        if not title:
-            raise ValueError("Failed to extract recipe title")
-        logger.info(f"Title extracted: {title}")
+        # TODO: Add OpenAI API call here
+        # response = openai.ChatCompletion.create(...)
         
-        total_time = scraper.total_time()
-        logger.info(f"Total time extracted: {total_time}")
-        
-        prep_time = scraper.prep_time() if hasattr(scraper, 'prep_time') else None
-        logger.info(f"Prep time extracted: {prep_time}")
-        
-        yields = scraper.yields()
-        logger.info(f"Yields extracted: {yields}")
-        
-        ingredients = scraper.ingredients()
-        if not ingredients:
-            raise ValueError("Failed to extract recipe ingredients")
-        logger.info(f"Ingredients extracted: {len(ingredients)} items")
-        logger.debug(f"Ingredients: {ingredients}")
-        
-        instructions = scraper.instructions()
-        instruction_steps = instructions.split('. ') if instructions else []
-        if not instruction_steps:
-            logger.warning("No instructions found in recipe")
-        logger.info(f"Instructions extracted: {len(instruction_steps)} steps")
-        logger.debug(f"Instructions: {instruction_steps}")
-        
-        image = scraper.image()
-        logger.info(f"Image URL extracted: {image}")
-        
-        host = scraper.host()
-        logger.info(f"Host extracted: {host}")
-        
-        nutrients = scraper.nutrients()
-        logger.info(f"Nutrients extracted: {nutrients}")
-        
-        # Extract cuisine with fallback strategy
-        cuisine = None
-        try:
-            if hasattr(scraper, 'schema') and isinstance(scraper.schema, dict):
-                # Try schema first
-                cuisine = scraper.schema.get('recipeCuisine')
-                if cuisine:
-                    logger.info(f"Cuisine extracted from schema: {cuisine}")
-                else:
-                    # Fallback to method
-                    try:
-                        cuisine = scraper.cuisine() if hasattr(scraper, 'cuisine') else None
-                        logger.info(f"Cuisine extracted from method: {cuisine}")
-                    except NotImplementedError:
-                        logger.info("Cuisine method not implemented")
-            else:
-                try:
-                    cuisine = scraper.cuisine() if hasattr(scraper, 'cuisine') else None
-                    logger.info(f"Cuisine extracted from method: {cuisine}")
-                except NotImplementedError:
-                    logger.info("Cuisine method not implemented")
-        except Exception as e:
-            logger.warning(f"Error extracting cuisine: {str(e)}")
-        
-        # Extract category with better error handling
-        category = None
-        try:
-            if hasattr(scraper, 'schema') and isinstance(scraper.schema, dict):
-                # Try schema first
-                category = scraper.schema.get('recipeCategory')
-                if category:
-                    logger.info(f"Category extracted from schema: {category}")
-                else:
-                    # Fallback to method
-                    try:
-                        category = scraper.category() if hasattr(scraper, 'category') else None
-                        logger.info(f"Category extracted from method: {category}")
-                    except NotImplementedError:
-                        logger.info("Category method not implemented")
-        except Exception as e:
-            logger.warning(f"Error extracting category: {str(e)}")
-        
-        recipe_data = {
-            "title": title,
-            "total_time": total_time,
-            "prep_time": prep_time,
-            "yields": yields,
-            "ingredients": ingredients,
-            "instructions": instruction_steps,
-            "image": image,
-            "host": host,
-            "nutrients": nutrients,
-            "cuisine": cuisine,
-            "category": category,
-            "url": url
+        return {
+            "title": "TODO",
+            "ingredients": [],
+            "instructions": [],
+            "parsing_methods": {"all_fields": "gpt-fallback"},
+            "parse_timestamp": datetime.now().isoformat()
         }
         
-        # Filter out None values and validate
-        filtered_data = {k: v for k, v in recipe_data.items() if v is not None}
-        logger.info(f"Final recipe data keys: {list(filtered_data.keys())}")
-        
-        # Ensure we have at least some basic recipe data
-        if not filtered_data.get('title') or not filtered_data.get('ingredients'):
-            raise NoSchemaFoundInWildMode("Missing required recipe data (title or ingredients)")
-        
-        return filtered_data
-    
-    except WebsiteNotImplementedError as e:
-        logger.error(f"Website not implemented error for URL: {url}")
-        logger.error(f"Error details: {str(e)}")
-        raise
-    except NoSchemaFoundInWildMode as e:
-        logger.error(f"No recipe schema found for URL: {url}")
-        logger.error(f"Error details: {str(e)}")
-        raise
     except Exception as e:
-        logger.error(f"Unexpected error during recipe scraping: {str(e)}")
-        logger.error(f"Error type: {type(e).__name__}")
-        import traceback
-        logger.error(f"Traceback: {traceback.format_exc()}")
-        raise
+        logger.error(f"GPT extraction failed: {str(e)}")
+        return None
+
+def scrape_recipe(url: str) -> Dict[str, Any]:
+    """
+    Scrape recipe data with multiple fallback methods.
+    """
+    try:
+        # Try standard scraping first
+        recipe_data = try_standard_scraping(url)
+        if recipe_data and not recipe_data.get("error"):
+            return recipe_data
+            
+        # If standard scraping fails, try wild mode
+        recipe_data = try_wild_mode_scraping(url)
+        if recipe_data and not recipe_data.get("error"):
+            return recipe_data
+            
+        # If both fail, try GPT-based extraction
+        html_content = requests.get(url).text
+        recipe_data = extract_recipe_with_gpt(html_content)
+        if recipe_data:
+            recipe_data["url"] = url
+            return recipe_data
+            
+        return {"error": "All extraction methods failed"}
+        
+    except Exception as e:
+        logger.error(f"Recipe extraction failed: {str(e)}")
+        return {"error": str(e)}
 
 def create_notion_blocks(recipe_data: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
@@ -289,7 +237,7 @@ def create_notion_blocks(recipe_data: Dict[str, Any]) -> List[Dict[str, Any]]:
     Instructions follow below in full width.
     """
     blocks = []
-    
+
     # Create a two-column layout
     blocks.append({
         "type": "column_list",
@@ -324,7 +272,7 @@ def create_notion_blocks(recipe_data: Dict[str, Any]) -> List[Dict[str, Any]]:
             ]
         }
     })
-    
+
     # Add ingredients to left column
     left_column = blocks[0]["column_list"]["children"][0]["column"]["children"]
     if recipe_data.get('ingredients'):
@@ -340,10 +288,10 @@ def create_notion_blocks(recipe_data: Dict[str, Any]) -> List[Dict[str, Any]]:
                     "color": "default"
                 }
             })
-    
+
     # Add yield and nutrition to right column
     right_column = blocks[0]["column_list"]["children"][1]["column"]["children"]
-    
+
     # Add recipe yield/servings if available
     if recipe_data.get('yields'):
         right_column.append({
@@ -388,7 +336,7 @@ def create_notion_blocks(recipe_data: Dict[str, Any]) -> List[Dict[str, Any]]:
             'cholesterolContent': 'Cholesterol',
             'servingSize': 'Serving Size'
         }
-        
+
         # Format nutrition information in specified order
         nutrition_lines = []
         for key in nutrition_mapping:
@@ -396,7 +344,7 @@ def create_notion_blocks(recipe_data: Dict[str, Any]) -> List[Dict[str, Any]]:
                 value = recipe_data['nutrients'][key]
                 label = nutrition_mapping[key]
                 nutrition_lines.append(f"{label}: {value}")
-        
+
         if nutrition_lines:
             right_column.append({
                 "type": "callout",
@@ -411,13 +359,13 @@ def create_notion_blocks(recipe_data: Dict[str, Any]) -> List[Dict[str, Any]]:
                     "icon": {"emoji": "🥗"}
                 }
             })
-    
+
     # Add divider before instructions
     blocks.append({
         "type": "divider",
         "divider": {}
     })
-    
+
     # Add instructions section with numbered list
     if recipe_data.get('instructions'):
         blocks.extend([
@@ -433,7 +381,7 @@ def create_notion_blocks(recipe_data: Dict[str, Any]) -> List[Dict[str, Any]]:
                 }
             }
         ])
-        
+
         # Add each instruction step as a numbered list item
         for step in recipe_data['instructions']:
             if isinstance(step, str) and step.strip():
@@ -447,7 +395,7 @@ def create_notion_blocks(recipe_data: Dict[str, Any]) -> List[Dict[str, Any]]:
                         "color": "default"
                     }
                 })
-    
+
     return blocks
 
 def update_notion_page(page_id: str, recipe_data: Dict[str, Any]) -> None:
@@ -478,7 +426,7 @@ def update_notion_page(page_id: str, recipe_data: Dict[str, Any]) -> None:
         properties["Cooking Time, total"] = {"number": float(recipe_data["total_time"])}
     if isinstance(recipe_data.get('prep_time'), (int, float)):
         properties["Preparation Time"] = {"number": float(recipe_data["prep_time"])}
-    
+
     # Handle cuisine/tags if available
     if recipe_data.get('cuisine'):
         try:
@@ -489,7 +437,7 @@ def update_notion_page(page_id: str, recipe_data: Dict[str, Any]) -> None:
                 cuisines = [tag.strip() for tag in cuisines.split(',')]
             elif not isinstance(cuisines, list):
                 cuisines = [str(cuisines)]
-            
+
             # Cuisine emoji mapping
             cuisine_emojis = {
                 'Mexican': '🇲🇽 Mexican',
@@ -523,25 +471,25 @@ def update_notion_page(page_id: str, recipe_data: Dict[str, Any]) -> None:
                 'Vegan': '🌱 Vegan',
                 'Fusion': '🔄 Fusion'
             }
-                
+
             # Clean and capitalize each cuisine tag, add emojis where available
             cleaned_cuisines = []
             for tag in cuisines:
                 if not tag or not isinstance(tag, str):
                     continue
-                    
+
                 formatted_tag = tag.strip().title()
                 # Check if we have an emoji mapping for this cuisine
                 if formatted_tag in cuisine_emojis:
                     cleaned_cuisines.append(cuisine_emojis[formatted_tag])
                 else:
                     cleaned_cuisines.append(formatted_tag)
-            
+
             if cleaned_cuisines:
                 properties["Tags"] = {"multi_select": [{"name": tag} for tag in cleaned_cuisines]}
         except Exception as e:
             logger.warning(f"Failed to process cuisine tags: {e}")
-    
+
     # Handle meal type/category if available
     if recipe_data.get('category'):
         try:
@@ -638,11 +586,11 @@ def update_notion_page(page_id: str, recipe_data: Dict[str, Any]) -> None:
     # Then, get all existing blocks
     try:
         blocks = notion.blocks.children.list(block_id=page_id)
-        
+
         # Delete all existing blocks
         for block in blocks.get('results', []):
             notion.blocks.delete(block_id=block['id'])
-            
+
         logger.info(f"Deleted {len(blocks.get('results', []))} existing blocks")
     except Exception as e:
         logger.warning(f"Error cleaning up existing blocks: {e}")
@@ -665,29 +613,29 @@ def lambda_handler(event, context):
     try:
         logger.info("Starting Lambda execution")
         logger.debug(f"Received event: {json.dumps(event)}")
-        
+
         # Extract page info from the event
         page_info = extract_notion_page_info(event)
         if not page_info:
             raise ValueError("Failed to extract page info from event")
-            
+
         # Unpack the tuple
         page_id, url = page_info
-        
+
         if not url or not page_id:
             raise ValueError(f"Missing required fields. URL: {url}, Page ID: {page_id}")
-            
+
         if not is_valid_url(url):
             raise ValueError(f"Invalid URL format: {url}")
-            
+
         # Scrape recipe data
         recipe_data = scrape_recipe(url)
         if not recipe_data:
             raise ValueError("Failed to scrape recipe data")
-            
+
         # Update Notion page
         update_notion_page(page_id, recipe_data)
-        
+
         return {
             'statusCode': 200,
             'body': json.dumps({
@@ -696,7 +644,7 @@ def lambda_handler(event, context):
                 'url': url
             })
         }
-        
+
     except ValueError as e:
         logger.error(f"Validation error: {str(e)}")
         return {
